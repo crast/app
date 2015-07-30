@@ -1,0 +1,2 @@
+// +build appdebug
+package app
