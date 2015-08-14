@@ -1,5 +1,9 @@
 package app
 
+import (
+	"fmt"
+)
+
 // Defines the types which can be closed.
 // These types include:
 //   Closer
@@ -24,15 +28,15 @@ type RunCloser interface {
 }
 
 func adaptRunnable(r interface{}) func() error {
-	if rc, ok := f.(RunCloser); ok {
+	if rc, ok := r.(RunCloser); ok {
 		AddCloser(rc.Close)
 		return rc.Run
-	} else if f, ok := c.(func() error); ok {
+	} else if f, ok := r.(func() error); ok {
 		return f
-	} else if bareFunc, ok := c.(func()); ok {
+	} else if bareFunc, ok := r.(func()); ok {
 		return adaptBareFunc(bareFunc)
 	} else {
-		panic(fmt.Errorf("Value %#v is not a valid closeable", c))
+		panic(fmt.Errorf("Value %#v is not a valid runnable", r))
 	}
 }
 

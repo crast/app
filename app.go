@@ -75,7 +75,7 @@ func syncStop() bool {
 	closed := false
 	running := true
 	for running {
-		var closer Closer
+		var closer func() error
 		mutex.Lock()
 		i := len(closers) - 1
 		if i < 0 {
@@ -87,7 +87,7 @@ func syncStop() bool {
 		mutex.Unlock()
 		if closer != nil {
 			closed = true
-			Go(closer)
+			closer()
 		}
 	}
 	return closed

@@ -12,7 +12,7 @@ func TestSimpleAppCloses(t *testing.T) {
 	var handle int32
 	Go(stupidWorkFunc(5, &handle))
 	Go(stupidWorkFunc(10, &handle))
-	AddCloser(adaptCloser(func() error {
+	AddCloser(asCloser(func() error {
 		stupidWorkFunc(20, &handle)()
 		Go(stupidWorkFunc(10, &handle))
 		return nil
@@ -23,16 +23,16 @@ func TestSimpleAppCloses(t *testing.T) {
 
 func TestCloserOrdering(t *testing.T) {
 	c := make(chan int, 10)
-	buildCloser := func(blah int) adaptCloser {
+	buildCloser := func(blah int) asCloser {
 		return func() error {
 			c <- blah
 			return nil
 		}
 	}
-	AddCloser(adaptCloser(func() error {
+	AddCloser(func() error {
 		close(c)
 		return nil
-	}))
+	})
 	AddCloser(buildCloser(1))
 	AddCloser(buildCloser(2))
 	AddCloser(buildCloser(3))
@@ -45,9 +45,9 @@ func TestCloserOrdering(t *testing.T) {
 	assert.Equal(t, v, []int{4, 3, 2, 1})
 }
 
-type adaptCloser func() error
+type asCloser func() error
 
-func (f adaptCloser) Close() error {
+func (f asCloser) Close() error {
 	return f()
 }
 
