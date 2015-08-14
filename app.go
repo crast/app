@@ -9,22 +9,23 @@ import (
 
 var lastPid = 0
 var mutex sync.Mutex
-var closers []Closer
+var closers []func() error
 var running = make(map[int]*runstate)
 var notify = make(chan int)
 
 // Add a closer to do some sort of cleanup.
 // Closers are run last-in first-out.
-func AddCloser(closer Closer) {
+func AddCloser(closer Closeable) {
 	mutex.Lock()
 	defer mutex.Unlock()
-	closers = append(closers, closer)
+	closers = append(closers, adaptCloser(closer))
 }
 
 // Run func runnable in a goroutine.
 // If the runnable panics, captures the panic and starts the shutdown process.
 // If the runnable returns a non-nil error, then also starts the shutdown process.
-func Go(runnable func() error) {
+func Go(f Runnable) {
+	runnable := adaptRunnable(f)
 	state := &runstate{true}
 	mutex.Lock()
 	lastPid++
@@ -36,7 +37,7 @@ func Go(runnable func() error) {
 
 // Run your app until it's complete.
 func Main() {
-	// Probably overkill: run until there's nothing stopped.
+	// Drain until there's nothing stopped; allows stoppers to start goroutines if desired.
 	for {
 		drainRunning()
 		if !syncStop() {
@@ -57,6 +58,7 @@ func drainRunning() {
 		if !ok {
 			break
 		}
+		Debug("Got completion signal for pid %d", pid)
 		mutex.Lock()
 		delete(running, pid)
 		mutex.Unlock()
@@ -85,7 +87,7 @@ func syncStop() bool {
 		mutex.Unlock()
 		if closer != nil {
 			closed = true
-			Go(closer.Close)
+			Go(closer)
 		}
 	}
 	return closed
@@ -96,10 +98,6 @@ func syncStop() bool {
 func Serve(l net.Listener, server Serveable) {
 	AddCloser(l)
 	Go(func() error { return server.Serve(l) })
-}
-
-type Closer interface {
-	Close() error
 }
 
 type Serveable interface {
@@ -123,7 +121,7 @@ func (r *runstate) run(pid int, runnable func() error) {
 	}()
 	err := runnable()
 	if err != nil {
-		fmt.Printf("Got error: %v", err)
+		ErrorHandler(runnable, err)
 		Stop()
 	}
 }
@@ -132,4 +130,8 @@ func (r *runstate) run(pid int, runnable func() error) {
 // Can be overridden if desired to provide your own panic responder.
 var PanicHandler = func(panicVal interface{}, stack []byte) {
 	fmt.Printf("Panic recovered: %v\nStack: %s\n", panicVal, stack)
+}
+
+var ErrorHandler = func(runnable func() error, err error) {
+	fmt.Printf("Got error: %v\n", err)
 }

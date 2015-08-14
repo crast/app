@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
 )
@@ -10,7 +9,7 @@ var sigchan chan os.Signal
 
 func sigListener() {
 	for s := range sigchan {
-		fmt.Printf("Got Signal %#v", s)
+		Debug("Got Signal %#v", s)
 		Stop()
 	}
 }
