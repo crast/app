@@ -1,7 +1,6 @@
 package app //  import "gopkg.in/crast/app.v0"
 
 import (
-	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -85,6 +84,7 @@ func syncStop() (closed bool) {
 }
 
 // helper to pop the last closer off the stack.
+// returns nil if there are no closers remaining.
 func popCloser() (closer func() error) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -119,22 +119,19 @@ func (r *runstate) run(pid int, runnable func() error) {
 			stackbuf := make([]byte, 16*1024)
 			i := runtime.Stack(stackbuf, false)
 			stackbuf = stackbuf[:i]
-			PanicHandler(v, stackbuf)
+			PanicHandler(crashInfo{
+				runnable: runnable,
+				panicVal: v,
+				stack:    stackbuf,
+			})
 		}
 	}()
 	err := runnable()
 	if err != nil {
-		ErrorHandler(runnable, err)
+		ErrorHandler(crashInfo{
+			runnable: runnable,
+			err:      err,
+		})
 		Stop()
 	}
-}
-
-// A function to handle panics.
-// Can be overridden if desired to provide your own panic responder.
-var PanicHandler = func(panicVal interface{}, stack []byte) {
-	fmt.Printf("Panic recovered: %v\nStack: %s\n", panicVal, stack)
-}
-
-var ErrorHandler = func(runnable func() error, err error) {
-	fmt.Printf("Got error: %v\n", err)
 }

@@ -18,7 +18,7 @@ func TestSimpleAppCloses(t *testing.T) {
 		return nil
 	}))
 	Main()
-	assert.Equal(t, 45, handle)
+	assert.Equal(t, int32(45), handle)
 }
 
 func TestCloserOrdering(t *testing.T) {
