@@ -71,26 +71,29 @@ func Stop() {
 	go syncStop()
 }
 
-func syncStop() bool {
-	closed := false
-	running := true
-	for running {
-		var closer func() error
-		mutex.Lock()
-		i := len(closers) - 1
-		if i < 0 {
-			running = false
+func syncStop() (closed bool) {
+	for {
+		closer := popCloser()
+		if closer == nil {
+			break
 		} else {
-			closer = closers[i]
-			closers = closers[:i]
-		}
-		mutex.Unlock()
-		if closer != nil {
 			closed = true
 			closer()
 		}
 	}
 	return closed
+}
+
+// helper to pop the last closer off the stack.
+func popCloser() (closer func() error) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	i := len(closers) - 1
+	if i >= 0 {
+		closer = closers[i]
+		closers = closers[:i]
+	}
+	return
 }
 
 // Shortcut for things which look like servers.
