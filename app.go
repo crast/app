@@ -11,6 +11,7 @@ var mutex sync.Mutex
 var closers []func() error
 var running = make(map[int]*runstate)
 var notify = make(chan int)
+var stopping bool
 
 // Add a closer to do some sort of cleanup.
 // Closers are run last-in first-out.
@@ -43,6 +44,7 @@ func Main() {
 			break
 		}
 	}
+	setStopping(false)
 }
 
 func drainRunning() {
@@ -71,16 +73,36 @@ func Stop() {
 }
 
 func syncStop() (closed bool) {
+	setStopping(true)
 	for {
 		closer := popCloser()
 		if closer == nil {
 			break
 		} else {
 			closed = true
-			closer()
+			if err := filterError(closer()); err != nil {
+				ErrorHandler(crashInfo{
+					runnable: closer,
+					err:      err,
+				})
+			}
 		}
 	}
 	return closed
+}
+
+// Return true if we're in the stop loop (running closers)
+// Needs to acquire a lock, so it is not wise to hit this in a tight loop.
+func Stopping() bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return stopping
+}
+
+func setStopping(val bool) {
+	mutex.Lock()
+	stopping = val
+	mutex.Unlock()
 }
 
 // helper to pop the last closer off the stack.
@@ -126,7 +148,7 @@ func (r *runstate) run(pid int, runnable func() error) {
 			})
 		}
 	}()
-	err := runnable()
+	err := filterError(runnable())
 	if err != nil {
 		ErrorHandler(crashInfo{
 			runnable: runnable,

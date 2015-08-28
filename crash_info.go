@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net"
 )
 
 // The value given when we have a panic in a runnable.
@@ -55,4 +56,24 @@ var PanicHandler = func(info PanicInfo) {
 // Can be overridden if desired to provide your own error responder.
 var ErrorHandler = func(info ErrorInfo) {
 	fmt.Printf("Got error: %v\n", info.Err())
+}
+
+// Filter errors we expect to have that are not really errors.
+// Can be overridden to provide your own error filter.
+var FilterError = func(err error) error {
+	if opErr, ok := err.(*net.OpError); ok && opErr.Op == "accept" {
+		if Stopping() && opErr.Err.Error() == "use of closed network connection" {
+			Debug("filtered error %v", opErr)
+			return nil
+		}
+	}
+	return err
+}
+
+// Only call FilterError if err != nil
+func filterError(err error) error {
+	if err != nil {
+		err = FilterError(err)
+	}
+	return err
 }

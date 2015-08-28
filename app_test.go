@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,40 @@ func TestCloserOrdering(t *testing.T) {
 		v = append(v, i)
 	}
 	assert.Equal(t, v, []int{4, 3, 2, 1})
+}
+
+func TestFilterError(t *testing.T) {
+	currentHandler := ErrorHandler
+	defer func() {
+		ErrorHandler = currentHandler
+	}()
+
+	setup := func() chan struct{} {
+		stop := make(chan struct{})
+		Go(func() error {
+			<-stop
+			return &net.OpError{Op: "accept", Err: errors.New("use of closed network connection")}
+		})
+		return stop
+	}
+
+	// Phase 1, should error
+	stop := setup()
+	Go(func() { close(stop) })
+	Main()
+
+	// Phase 2, should filter.
+	ErrorHandler = func(ErrorInfo) {
+		t.FailNow()
+	}
+
+	stop = setup()
+	AddCloser(func() { close(stop) })
+	Go(func() {
+		time.Sleep(50 * time.Millisecond)
+		Stop()
+	})
+	Main()
 }
 
 type asCloser func() error
