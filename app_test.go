@@ -81,6 +81,22 @@ func TestFilterError(t *testing.T) {
 	Main()
 }
 
+func TestWaitStopDoesntDeadlock(t *testing.T) {
+	assert := assert.New(t)
+	var handle int32
+	Go(stupidWorkFunc(5, &handle))
+	Go(stupidWorkFunc(10, &handle))
+	Main()
+	assert.False(Stopping())
+	Debug("first waitstop")
+	waitStop()
+	assert.True(Stopping())
+	Debug("Second waitstop")
+	waitStop()
+	assert.True(Stopping())
+	setStopping(false)
+}
+
 type asCloser func() error
 
 func (f asCloser) Close() error {

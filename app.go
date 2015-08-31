@@ -4,6 +4,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"time"
 )
 
 var lastPid = 0
@@ -12,13 +13,19 @@ var closers []func() error
 var running = make(map[int]*runstate)
 var notify = make(chan int)
 var stopping bool
+var stopchan chan struct{}
+
+func init() {
+	stopchan = make(chan struct{}, 1)
+	stopchan <- struct{}{}
+}
 
 // Add a closer to do some sort of cleanup.
 // Closers are run last-in first-out.
 func AddCloser(closer Closeable) {
 	mutex.Lock()
 	defer mutex.Unlock()
-	closers = append(closers, adaptCloser(closer))
+	closers = append(closers, adaptCloser(f))
 }
 
 // Run func runnable in a goroutine.
@@ -40,7 +47,7 @@ func Main() {
 	// Drain until there's nothing stopped; allows stoppers to start goroutines if desired.
 	for {
 		drainRunning()
-		if !syncStop() {
+		if !waitStop() {
 			break
 		}
 	}
@@ -69,11 +76,35 @@ func drainRunning() {
 // Signal the app to begin stopping.
 // Stop returns to its caller immediately.
 func Stop() {
-	go syncStop()
+	go waitStop()
+}
+
+func waitStop() bool {
+	setStopping(true)
+	select {
+	case _, ok := <-stopchan:
+		Debug("Got stop message %v", ok)
+		if ok {
+			defer markDoneStop()
+		}
+	case <-time.After(10 * time.Second):
+		Debug("timed out waiting for stoppage")
+	}
+	return syncStop()
+}
+
+func markDoneStop() {
+	select {
+	case stopchan <- struct{}{}:
+		Debug("returned our token")
+		// we woke someone else up
+	default:
+		Debug("donestop ran into a full queue?")
+		//	// nothing else to do here
+	}
 }
 
 func syncStop() (closed bool) {
-	setStopping(true)
 	for {
 		closer := popCloser()
 		if closer == nil {
@@ -95,8 +126,9 @@ func syncStop() (closed bool) {
 // Needs to acquire a lock, so it is not wise to hit this in a tight loop.
 func Stopping() bool {
 	mutex.Lock()
-	defer mutex.Unlock()
-	return stopping
+	result := stopping
+	mutex.Unlock()
+	return result
 }
 
 func setStopping(val bool) {
