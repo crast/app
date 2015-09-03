@@ -25,7 +25,7 @@ func init() {
 func AddCloser(closer Closeable) {
 	mutex.Lock()
 	defer mutex.Unlock()
-	closers = append(closers, adaptCloser(f))
+	closers = append(closers, adaptCloser(closer))
 }
 
 // Run func runnable in a goroutine.
