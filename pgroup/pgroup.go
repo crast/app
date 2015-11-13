@@ -31,7 +31,7 @@ type Group struct {
 	FilterError func(err error) error
 }
 
-func NewGroup() *Group {
+func New() *Group {
 	g := &Group{
 		running:     make(map[int]*runstate),
 		notify:      make(chan int),
