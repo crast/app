@@ -12,7 +12,6 @@ purpose of testing/understanding something.
 package pgroup
 
 import (
-	"log"
 	"runtime"
 	"sync"
 	"time"
@@ -106,7 +105,7 @@ func (g *Group) drainRunning() {
 		if !ok {
 			break
 		}
-		//Debug("Got completion signal for pid %d", pid)
+		//g.debug("Got completion signal for pid %d", pid)
 		g.mutex.Lock()
 		delete(g.running, pid)
 		g.mutex.Unlock()
@@ -123,12 +122,12 @@ func (g *Group) waitStop() bool {
 	g.setStopping(true)
 	select {
 	case _, ok := <-g.stopchan:
-		//Debug("Got stop message %v", ok)
+		//g.debug("Got stop message %v", ok)
 		if ok {
 			defer g.markDoneStop()
 		}
 	case <-time.After(10 * time.Second):
-		Debug("timed out waiting for stoppage")
+		g.debug("timed out waiting for stoppage")
 	}
 	return g.syncStop()
 }
@@ -136,10 +135,10 @@ func (g *Group) waitStop() bool {
 func (g *Group) markDoneStop() {
 	select {
 	case g.stopchan <- struct{}{}:
-		Debug("returned our token")
+		g.debug("returned our token")
 		// we woke someone else up
 	default:
-		Debug("donestop ran into a full queue?")
+		g.debug("donestop ran into a full queue?")
 		//	// nothing else to do here
 	}
 }
@@ -199,6 +198,10 @@ func (g *Group) filterError(err error) error {
 	return err
 }
 
+func (g *Group) debug(fmt string, v ...interface{}) {
+	// do nothing for now
+}
+
 /*
 // Shortcut for things which look like servers.
 // Adds the listener as a closer, and then runs Go on the serveable.
@@ -242,8 +245,4 @@ func (r *runstate) run(pid int, runnable func() error) {
 		})*/
 		r.group.Stop()
 	}
-}
-
-func Debug(fmt string, v ...interface{}) {
-	log.Printf(fmt, v...)
 }
