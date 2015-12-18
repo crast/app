@@ -1,4 +1,6 @@
 # app
+
+[![Join the chat at https://gitter.im/crast/app](https://badges.gitter.im/crast/app.svg)](https://gitter.im/crast/app?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 Run your go app, with signals, shutdown, closing, etc.
 
 ## Basics
