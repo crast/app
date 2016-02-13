@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"gopkg.in/crast/app.v0/crash"
 )
 
 var lastPid = 0
@@ -112,10 +114,10 @@ func syncStop() (closed bool) {
 		} else {
 			closed = true
 			if err := filterError(closer()); err != nil {
-				ErrorHandler(crashInfo{
-					runnable: closer,
-					err:      err,
-				})
+				ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+					Runnable: closer,
+					Err:      err,
+				}))
 			}
 		}
 	}
@@ -173,19 +175,19 @@ func (r *runstate) run(pid int, runnable func() error) {
 			stackbuf := make([]byte, 16*1024)
 			i := runtime.Stack(stackbuf, false)
 			stackbuf = stackbuf[:i]
-			PanicHandler(crashInfo{
-				runnable: runnable,
-				panicVal: v,
-				stack:    stackbuf,
-			})
+			PanicHandler(crash.NewCrashInfo(&crash.CrashData{
+				Runnable: runnable,
+				PanicVal: v,
+				Stack:    stackbuf,
+			}))
 		}
 	}()
 	err := filterError(runnable())
 	if err != nil {
-		ErrorHandler(crashInfo{
-			runnable: runnable,
-			err:      err,
-		})
+		ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+			Runnable: runnable,
+			Err:      err,
+		}))
 		Stop()
 	}
 }

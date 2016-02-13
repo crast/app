@@ -15,8 +15,13 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"gopkg.in/crast/app.v0/crash"
 )
 
+/*
+Group is a heterogeneous group of goroutines managed together.
+*/
 type Group struct {
 	lastPid  int
 	mutex    sync.Mutex
@@ -26,16 +31,31 @@ type Group struct {
 	stopping bool
 	stopchan chan struct{}
 
-	// things people can override
+	// Optional event handlers that can be set by the user.
+	// Event handlers must not be changed once the group has begun running
+	// so it is adviseable to set these as soon as creating a group before running Go()
+
+	// FilterError is called when an error occurs during running a runnable started by Go().
+	// By default, it's expected to return the error back but it can be used to suppress errors
+	// by returning nil; this will suppress the shutdown process from starting.
 	FilterError func(err error) error
+
+	// ErrorHandler is called whenever a function run by Go or a closer returns an error value.
+	// It is not called if an error is suppressed by FilterError.
+	ErrorHandler func(crash.ErrorInfo)
+
+	// PanicHandler is called whenever a function run by Go, GoF, or a closer panics.
+	PanicHandler func(crash.PanicInfo)
 }
 
 func New() *Group {
 	g := &Group{
-		running:     make(map[int]*runstate),
-		notify:      make(chan int),
-		stopchan:    make(chan struct{}, 1),
-		FilterError: func(err error) error { return err },
+		running:      make(map[int]*runstate),
+		notify:       make(chan int),
+		stopchan:     make(chan struct{}, 1),
+		FilterError:  func(err error) error { return err },
+		ErrorHandler: func(crash.ErrorInfo) {},
+		PanicHandler: func(crash.PanicInfo) {},
 	}
 	g.stopchan <- struct{}{}
 	return g
@@ -112,8 +132,8 @@ func (g *Group) drainRunning() {
 	}
 }
 
-// Signal the app to begin stopping.
-// Stop returns to its caller immediately.
+// Stop signals the group to begin stopping.
+// It fires a goroutine to begin running the closers and returns to its caller immediately.
 func (g *Group) Stop() {
 	go g.waitStop()
 }
@@ -151,11 +171,10 @@ func (g *Group) syncStop() (closed bool) {
 		} else {
 			closed = true
 			if err := g.filterError(closer()); err != nil {
-				//TODO
-				/*ErrorHandler(crashInfo{
-					runnable: closer,
-					err:      err,
-				})*/
+				g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+					Runnable: closer,
+					Err:      err,
+				}))
 			}
 		}
 	}
@@ -228,21 +247,19 @@ func (r *runstate) run(pid int, runnable func() error) {
 			stackbuf := make([]byte, 16*1024)
 			i := runtime.Stack(stackbuf, false)
 			stackbuf = stackbuf[:i]
-			// TODO
-			/*PanicHandler(crashInfo{
-				runnable: runnable,
-				panicVal: v,
-				stack:    stackbuf,
-			})*/
+			r.group.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
+				Runnable: runnable,
+				PanicVal: v,
+				Stack:    stackbuf,
+			}))
 		}
 	}()
 	err := r.group.filterError(runnable())
 	if err != nil {
-		// TODO
-		/*ErrorHandler(crashInfo{
-			runnable: runnable,
-			err:      err,
-		})*/
+		r.group.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+			Runnable: runnable,
+			Err:      err,
+		}))
 		r.group.Stop()
 	}
 }

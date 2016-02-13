@@ -3,47 +3,17 @@ package app
 import (
 	"fmt"
 	"net"
+
+	"gopkg.in/crast/app.v0/crash"
 )
 
-// The value given when we have a panic in a runnable.
 type PanicInfo interface {
-	// The function we were running.
-	Runnable() func() error
-	// The actual value that comes from panic().
-	PanicVal() interface{}
-	// The text representation of the stack caught by panic handler.
-	Stack() []byte
+	crash.PanicInfo
 }
 
 // Given when we have an error return value from a runnable or a closer.
 type ErrorInfo interface {
-	// The function we were running.
-	Runnable() func() error
-	// The e
-	Err() error
-}
-
-type crashInfo struct {
-	runnable func() error
-	err      error
-	panicVal interface{}
-	stack    []byte
-}
-
-func (c crashInfo) Runnable() func() error {
-	return c.runnable
-}
-
-func (c crashInfo) Err() error {
-	return c.err
-}
-
-func (c crashInfo) PanicVal() interface{} {
-	return c.panicVal
-}
-
-func (c crashInfo) Stack() []byte {
-	return c.stack
+	crash.ErrorInfo
 }
 
 // A function to handle panics.
