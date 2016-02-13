@@ -1,14 +1,3 @@
-/*
-Manage a heterogeneous 'group' of goroutines as a single unit.
-
-This is a very similar concept to the app framework except dumbed down a bit:
-no automatic conversion of runnables, no built-in signal handling,
-and waiting on a group waits on only those goroutines.
-
-This is NOT a stable API currently, and lacking in a number of bits,
-right now it's basically copypasta from the app framework for the
-purpose of testing/understanding something.
-*/
 package pgroup
 
 import (
@@ -46,6 +35,8 @@ type Group struct {
 
 	// PanicHandler is called whenever a function run by Go, GoF, or a closer panics.
 	PanicHandler func(crash.PanicInfo)
+
+	DebugHandler func(string, ...interface{})
 }
 
 func New() *Group {
@@ -56,6 +47,7 @@ func New() *Group {
 		FilterError:  func(err error) error { return err },
 		ErrorHandler: func(crash.ErrorInfo) {},
 		PanicHandler: func(crash.PanicInfo) {},
+		DebugHandler: func(string, ...interface{}) {},
 	}
 	g.stopchan <- struct{}{}
 	return g
@@ -69,8 +61,17 @@ func (g *Group) AddCloser(closer func() error) {
 	g.closers = append(g.closers, closer)
 }
 
-// Run func runnable in a goroutine.
-// If the runnable panics, captures the panic and starts the shutdown process.
+/*
+GoF runs func f in a goroutine.
+This is a handy shortcut to running Go when you have a nullary function.
+
+Exactly equivalent to:
+
+    group.Go(func() error {
+        f()
+        return nil
+    })
+*/
 func (g *Group) GoF(f func()) {
 	g.Go(func() error {
 		f()
@@ -78,7 +79,7 @@ func (g *Group) GoF(f func()) {
 	})
 }
 
-// Run func runnable in a goroutine.
+// Go runs func runnable in a goroutine.
 // If the runnable panics, captures the panic and starts the shutdown process.
 // If the runnable returns a non-nil error, then also starts the shutdown process.
 func (g *Group) Go(runnable func() error) {
@@ -142,7 +143,7 @@ func (g *Group) waitStop() bool {
 	g.setStopping(true)
 	select {
 	case _, ok := <-g.stopchan:
-		//g.debug("Got stop message %v", ok)
+		g.debug("Got stop message %v", ok)
 		if ok {
 			defer g.markDoneStop()
 		}
