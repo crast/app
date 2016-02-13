@@ -219,21 +219,8 @@ func (g *Group) filterError(err error) error {
 }
 
 func (g *Group) debug(fmt string, v ...interface{}) {
-	// do nothing for now
+	g.DebugHandler(fmt, v...)
 }
-
-/*
-// Shortcut for things which look like servers.
-// Adds the listener as a closer, and then runs Go on the serveable.
-func Serve(l net.Listener, server Serveable) {
-	AddCloser(l)
-	Go(func() error { return server.Serve(l) })
-}
-
-type Serveable interface {
-	Serve(net.Listener) error
-}
-*/
 
 type runstate struct {
 	group   *Group
