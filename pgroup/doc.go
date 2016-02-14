@@ -1,9 +1,7 @@
 /*
 Package pgroup lets you manage a heterogeneous 'group' of goroutines as a single unit.
 
-This is a very similar concept to the app framework except dumbed down a bit:
-no automatic conversion of runnables, no built-in signal handling,
-and waiting on a group waits on only those goroutines.
+The "app" package uses this for its underlying code, adding a few more features.
 
 Rationale
 

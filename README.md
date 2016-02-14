@@ -1,6 +1,8 @@
 # app
 Run your go app, with signals, shutdown, closing, etc.
 
+[![Build Status](https://travis-ci.org/crast/app.svg?branch=master)](https://travis-ci.org/crast/app) [![GoDoc](https://godoc.org/gopkg.in/crast/app.v0?status.svg)](https://godoc.org/gopkg.in/crast/app.v0)
+
 ## Basics
 
 * Manages goroutines and sets up panic handlers for them

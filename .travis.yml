@@ -1,0 +1,14 @@
+language: go
+
+go:
+    - 1.4
+    - 1.5
+    - tip
+
+env:
+    global:
+        - APP_SUBPATH="src/gopkg.in/crast/app.v0"
+
+before_install:
+    - "pwd"
+    - "if ! pwd | grep -q 'gopkg.in/crast'; then cd $GOPATH && mkdir -p $(dirname $APP_SUBPATH) && pwd && mv $TRAVIS_BUILD_DIR $APP_SUBPATH && cd $APP_SUBPATH && pwd && export TRAVIS_BUILD_DIR=`pwd`; fi"
