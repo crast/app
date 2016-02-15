@@ -15,7 +15,7 @@ type Group struct {
 	lastPid  int
 	mutex    sync.Mutex
 	closers  []func() error
-	running  map[int]*runstate
+	running  map[int]bool
 	notify   chan int
 	stopping bool
 	stopchan chan struct{}
@@ -41,7 +41,7 @@ type Group struct {
 
 func New() *Group {
 	g := &Group{
-		running:      make(map[int]*runstate),
+		running:      make(map[int]bool),
 		notify:       make(chan int, 1),
 		stopchan:     make(chan struct{}, 1),
 		FilterError:  func(err error) error { return err },
@@ -83,13 +83,12 @@ func (g *Group) GoF(f func()) {
 // If the runnable panics, captures the panic and starts the shutdown process.
 // If the runnable returns a non-nil error, then also starts the shutdown process.
 func (g *Group) Go(runnable func() error) {
-	state := &runstate{g, true}
 	g.mutex.Lock()
 	g.lastPid++
 	pid := g.lastPid
-	g.running[pid] = state
+	g.running[pid] = true
 	g.mutex.Unlock()
-	go state.run(pid, runnable)
+	go g.run(pid, runnable)
 }
 
 // Start N copies of the same goroutine.
@@ -112,6 +111,7 @@ func (g *Group) Wait() {
 		}
 	}
 	g.setStopping(false)
+
 	// wake up anyone else who might be blocked on wait
 	select {
 	case g.notify <- -1:
@@ -227,32 +227,26 @@ func (g *Group) debug(fmt string, v ...interface{}) {
 	g.DebugHandler(fmt, v...)
 }
 
-type runstate struct {
-	group   *Group
-	running bool
-}
-
-func (r *runstate) run(pid int, runnable func() error) {
+func (g *Group) run(pid int, runnable func() error) {
 	defer func() {
-		r.running = false
-		r.group.notify <- pid
+		g.notify <- pid
 		if v := recover(); v != nil {
 			stackbuf := make([]byte, 16*1024)
 			i := runtime.Stack(stackbuf, false)
 			stackbuf = stackbuf[:i]
-			r.group.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
+			g.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
 				Runnable: runnable,
 				PanicVal: v,
 				Stack:    stackbuf,
 			}))
 		}
 	}()
-	err := r.group.filterError(runnable())
+	err := g.filterError(runnable())
 	if err != nil {
-		r.group.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+		g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
 			Runnable: runnable,
 			Err:      err,
 		}))
-		r.group.Stop()
+		g.Stop()
 	}
 }

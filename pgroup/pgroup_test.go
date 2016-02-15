@@ -43,10 +43,10 @@ func TestParallelWaitDeadlock(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(int32(50), handle)
-	group.running[-1] = &runstate{}
+	group.running[-1] = true
 	group.Go(stupidWorkFunc(group, 10, &handle))
 	group.Wait()
-	assert.Nil(group.running[-1])
+	assert.False(group.running[-1])
 	assert.Equal(int32(60), handle)
 }
 
