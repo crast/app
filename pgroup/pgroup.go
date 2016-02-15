@@ -42,7 +42,7 @@ type Group struct {
 func New() *Group {
 	g := &Group{
 		running:      make(map[int]*runstate),
-		notify:       make(chan int),
+		notify:       make(chan int, 1),
 		stopchan:     make(chan struct{}, 1),
 		FilterError:  func(err error) error { return err },
 		ErrorHandler: func(crash.ErrorInfo) {},
@@ -112,6 +112,11 @@ func (g *Group) Wait() {
 		}
 	}
 	g.setStopping(false)
+	// wake up anyone else who might be blocked on wait
+	select {
+	case g.notify <- -1:
+	default:
+	}
 }
 
 func (g *Group) drainRunning() {

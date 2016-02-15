@@ -1,6 +1,7 @@
 package pgroup
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,30 @@ func TestWaitStopDoesntDeadlock(t *testing.T) {
 	group.waitStop()
 	assert.True(group.Stopping())
 	group.setStopping(false)
+}
+
+func TestParallelWaitDeadlock(t *testing.T) {
+	assert := assert.New(t)
+	var handle int32
+	group := New()
+	group.Go(stupidWorkFunc(group, 20, &handle))
+	group.Go(stupidWorkFunc(group, 30, &handle))
+
+	var wg sync.WaitGroup
+	wg.Add(10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+			group.Wait()
+		}()
+	}
+	wg.Wait()
+	assert.Equal(int32(50), handle)
+	group.running[-1] = &runstate{}
+	group.Go(stupidWorkFunc(group, 10, &handle))
+	group.Wait()
+	assert.Nil(group.running[-1])
+	assert.Equal(int32(60), handle)
 }
 
 ///// UTILITIES
