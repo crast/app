@@ -10,11 +10,7 @@ import (
 var appGroup *pgroup.Group
 
 func init() {
-	appGroup = pgroup.New()
-	appGroup.FilterError = func(err error) error { return FilterError(err) }
-	appGroup.ErrorHandler = func(info crash.ErrorInfo) { ErrorHandler(info) }
-	appGroup.PanicHandler = func(info crash.PanicInfo) { PanicHandler(info) }
-	appGroup.DebugHandler = Debug
+	appGroup = newAppGroup()
 }
 
 // Add a closer to do some sort of cleanup.
@@ -57,4 +53,35 @@ func Serve(l net.Listener, server Serveable) {
 
 type Serveable interface {
 	Serve(net.Listener) error
+}
+
+// ChildGroup returns a new group configured to have handlers
+// that will send errors to the app handlers, and stop when the app stops.
+//
+// The group will not wait on the child unless it's explicitly requested
+func ChildGroup() *pgroup.Group {
+	group := newAppGroup()
+	AddCloser(group.Stop)
+	return group
+}
+
+// Root returns the process group underlying the app
+//
+// Just like with pgroup, making modifications to this group
+// runs the same risk of race conditions unless this is done
+// before anything happens to the group.
+func Root() *pgroup.Group {
+	return appGroup
+}
+
+// newAppGroup makes a group with all the handlers pointing at
+// the "app" versions of the handlers so we can use the package
+// handlers even if they change.
+func newAppGroup() *pgroup.Group {
+	group := pgroup.New()
+	group.FilterError = func(err error) error { return FilterError(err) }
+	group.ErrorHandler = func(info crash.ErrorInfo) { ErrorHandler(info) }
+	group.PanicHandler = func(info crash.PanicInfo) { PanicHandler(info) }
+	group.DebugHandler = Debug
+	return group
 }
