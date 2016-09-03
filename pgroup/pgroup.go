@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gopkg.in/crast/app.v0/crash"
+	"gopkg.in/crast/app.v0/multierror"
 )
 
 /*
@@ -19,6 +20,9 @@ type Group struct {
 	notify   chan int
 	stopping bool
 	stopchan chan struct{}
+
+	captureErrors bool
+	errors        multierror.Errors
 
 	// Optional event handlers that can be set by the user.
 	// Event handlers must not be changed once the group has begun running
@@ -37,19 +41,35 @@ type Group struct {
 	PanicHandler func(crash.PanicInfo)
 
 	DebugHandler func(string, ...interface{})
+
+	// The amount of time, after which, parallel closer operations may end up running in more goroutines.
+	StopUnblockTime time.Duration
 }
 
 func New() *Group {
 	g := &Group{
-		running:      make(map[int]bool),
-		notify:       make(chan int, 1),
-		stopchan:     make(chan struct{}, 1),
+		running:  make(map[int]bool),
+		notify:   make(chan int, 1),
+		stopchan: make(chan struct{}, 1),
+
+		StopUnblockTime: 10 * time.Second,
+
 		FilterError:  func(err error) error { return err },
 		ErrorHandler: func(crash.ErrorInfo) {},
 		PanicHandler: func(crash.PanicInfo) {},
 		DebugHandler: func(string, ...interface{}) {},
 	}
 	g.stopchan <- struct{}{}
+	return g
+}
+
+// Enables capture of errors, and returns the same group.
+// Error capture must be enabled before using with WaitCapture
+func (g *Group) EnableCapture() *Group {
+	if g.errors == nil {
+		g.errors = make(multierror.Errors, 4)
+	}
+	g.captureErrors = true
 	return g
 }
 
@@ -101,7 +121,13 @@ func (g *Group) StartN(n int, runnable func() error) {
 	}
 }
 
-// Run your app until it's complete.
+// Wait until all goroutines run with Go complete, and then run all closers in reverse order.
+//
+// Wait is the key component of the process group. If Wait is not run, then the process group
+// will never get a chance to clean itself up and will leak resources.
+//
+// It is allowable to run Wait simultaneously in multiple goroutines, and when this is done,
+// all of the Wait will end at some point shortly after all goroutines have completed.
 func (g *Group) Wait() {
 	// Drain until there's nothing stopped; allows stoppers to start goroutines if desired.
 	for {
@@ -119,14 +145,23 @@ func (g *Group) Wait() {
 	}
 }
 
+// WaitCapture runs wait, and then returns all errors captured during the running of this group.
+// Unlike Wait, it is not allowable to run WaitCapture in multiple goroutines.
+func (g *Group) WaitCapture() multierror.Errors {
+	g.Wait()
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+	errors := g.errors
+	g.errors = nil
+	return errors
+}
+
 func (g *Group) drainRunning() {
-	for {
-		g.mutex.Lock()
-		l := len(g.running)
-		g.mutex.Unlock()
-		if l == 0 {
-			break
-		}
+	g.mutex.Lock()
+	l := len(g.running)
+	g.mutex.Unlock()
+
+	for l > 0 {
 		pid, ok := <-g.notify
 		if !ok {
 			break
@@ -134,6 +169,7 @@ func (g *Group) drainRunning() {
 		//g.debug("Got completion signal for pid %d", pid)
 		g.mutex.Lock()
 		delete(g.running, pid)
+		l = len(g.running)
 		g.mutex.Unlock()
 	}
 }
@@ -152,7 +188,7 @@ func (g *Group) waitStop() bool {
 		if ok {
 			defer g.markDoneStop()
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(g.StopUnblockTime):
 		g.debug("timed out waiting for stoppage")
 	}
 	return g.syncStop()
@@ -177,10 +213,7 @@ func (g *Group) syncStop() (closed bool) {
 		} else {
 			closed = true
 			if err := g.filterError(closer()); err != nil {
-				g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
-					Runnable: closer,
-					Err:      err,
-				}))
+				g.triggerError(closer, err)
 			}
 		}
 	}
@@ -243,10 +276,19 @@ func (g *Group) run(pid int, runnable func() error) {
 	}()
 	err := g.filterError(runnable())
 	if err != nil {
-		g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
-			Runnable: runnable,
-			Err:      err,
-		}))
+		g.triggerError(runnable, err)
 		g.Stop()
+	}
+}
+
+func (g *Group) triggerError(runnable func() error, err error) {
+	g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
+		Runnable: runnable,
+		Err:      err,
+	}))
+	if g.captureErrors {
+		g.mutex.Lock()
+		g.errors = append(g.errors, err)
+		g.mutex.Unlock()
 	}
 }
