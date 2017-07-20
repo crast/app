@@ -6,23 +6,19 @@ import (
 	"time"
 
 	"gopkg.in/crast/app.v0/crash"
-	"gopkg.in/crast/app.v0/multierror"
 )
 
 /*
 Group is a heterogeneous group of goroutines managed together.
 */
 type Group struct {
-	lastPid  int
-	mutex    sync.Mutex
+	mutex    *sync.Mutex
 	closers  []func() error
-	running  map[int]bool
-	notify   chan int
+	running  map[*Task]bool
+	notify   chan *Task
 	stopping bool
 	stopchan chan struct{}
-
-	captureErrors bool
-	errors        multierror.Errors
+	cond     *sync.Cond
 
 	// Optional event handlers that can be set by the user.
 	// Event handlers must not be changed once the group has begun running
@@ -48,10 +44,13 @@ type Group struct {
 }
 
 func New() *Group {
+	mu := &sync.Mutex{}
 	g := &Group{
-		running:  make(map[int]bool),
-		notify:   make(chan int, 1),
+		running:  make(map[*Task]bool),
+		notify:   make(chan *Task, 1),
 		stopchan: make(chan struct{}, 1),
+		mutex:    mu,
+		cond:     sync.NewCond(mu),
 
 		StopUnblockTime: 10 * time.Second,
 
@@ -61,16 +60,6 @@ func New() *Group {
 		DebugHandler: func(string, ...interface{}) {},
 	}
 	g.stopchan <- struct{}{}
-	return g
-}
-
-// Enables capture of errors, and returns the same group.
-// Error capture must be enabled before using with WaitCapture
-func (g *Group) EnableCapture() *Group {
-	if g.errors == nil {
-		g.errors = make(multierror.Errors, 0, 4)
-	}
-	g.captureErrors = true
 	return g
 }
 
@@ -103,13 +92,15 @@ func (g *Group) GoF(f func()) {
 // Go runs func runnable in a goroutine.
 // If the runnable panics, captures the panic and starts the shutdown process.
 // If the runnable returns a non-nil error, then also starts the shutdown process.
-func (g *Group) Go(runnable func() error) {
-	g.mutex.Lock()
-	g.lastPid++
-	pid := g.lastPid
-	g.running[pid] = true
-	g.mutex.Unlock()
-	go g.run(pid, runnable)
+//
+// The returned task can be used for waiting on; it will have already been Started
+func (g *Group) Go(runnable func() error) *Task {
+	task := &Task{
+		group:    g,
+		runnable: runnable,
+	}
+	task.Start()
+	return task
 }
 
 // Start N copies of the same goroutine.
@@ -141,20 +132,9 @@ func (g *Group) Wait() {
 
 	// wake up anyone else who might be blocked on wait
 	select {
-	case g.notify <- -1:
+	case g.notify <- nil:
 	default:
 	}
-}
-
-// WaitCapture runs wait, and then returns all errors captured during the running of this group.
-// Unlike Wait, it is not allowable to run WaitCapture in multiple goroutines.
-func (g *Group) WaitCapture() multierror.Errors {
-	g.Wait()
-	g.mutex.Lock()
-	defer g.mutex.Unlock()
-	errors := g.errors
-	g.errors = nil
-	return errors
 }
 
 func (g *Group) drainRunning() {
@@ -163,14 +143,16 @@ func (g *Group) drainRunning() {
 	g.mutex.Unlock()
 
 	for l > 0 {
-		pid, ok := <-g.notify
+		task, ok := <-g.notify
 		if !ok {
 			break
 		}
-		//g.debug("Got completion signal for pid %d", pid)
 		g.mutex.Lock()
-		delete(g.running, pid)
+		delete(g.running, task)
 		l = len(g.running)
+		if task != nil {
+			g.cond.Broadcast()
+		}
 		g.mutex.Unlock()
 	}
 }
@@ -261,35 +243,108 @@ func (g *Group) debug(fmt string, v ...interface{}) {
 	g.DebugHandler(fmt, v...)
 }
 
-func (g *Group) run(pid int, runnable func() error) {
-	defer func() {
-		g.notify <- pid
-		if v := recover(); v != nil {
-			stackbuf := make([]byte, 16*1024)
-			i := runtime.Stack(stackbuf, false)
-			stackbuf = stackbuf[:i]
-			g.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
-				Runnable: runnable,
-				PanicVal: v,
-				Stack:    stackbuf,
-			}))
-		}
-	}()
-	err := g.filterError(runnable())
-	if err != nil {
-		g.triggerError(runnable, err)
-		g.Stop()
-	}
-}
-
 func (g *Group) triggerError(runnable func() error, err error) {
 	g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
 		Runnable: runnable,
 		Err:      err,
 	}))
-	if g.captureErrors {
-		g.mutex.Lock()
-		g.errors = append(g.errors, err)
-		g.mutex.Unlock()
+}
+
+// Task is used to collect results of one single invocation.
+type Task struct {
+	group    *Group
+	err      error
+	runnable func() error
+	state    state
+}
+
+// Err returns the error associated after running this task.
+func (t *Task) Err() (err error) {
+	t.group.mutex.Lock()
+	err = t.err
+	t.group.mutex.Unlock()
+	return err
+}
+
+// SetErr sets the error.
+func (t *Task) setErr(err error) {
+	t.group.mutex.Lock()
+	t.err = err
+	t.group.mutex.Unlock()
+}
+
+// Failed returns true if the task has failed.
+// Will acquire a lock, so do not run this on a tight loop.
+func (t *Task) Failed() bool {
+	t.group.mutex.Lock()
+	result := (t.state == statePanicked || t.err != nil)
+	t.group.mutex.Unlock()
+	return result
+}
+
+// Wait on this task.
+func (t *Task) Wait() (err error) {
+	t.group.mutex.Lock()
+	for t.state == stateNew || t.state == stateRunning || t.group.running[t] {
+		t.group.cond.Wait()
+	}
+	err = t.err
+	t.group.mutex.Unlock()
+	return err
+}
+
+// Start the task. Only call this once!
+func (t *Task) Start() {
+	t.group.mutex.Lock()
+	t.group.running[t] = true
+	t.state = stateRunning
+	t.group.mutex.Unlock()
+
+	go t.run()
+}
+
+func (t *Task) setState(state state) {
+	t.group.mutex.Lock()
+	t.state = state
+	t.group.mutex.Unlock()
+}
+
+func (t *Task) run() {
+	g := t.group
+
+	defer func() {
+		g.notify <- t
+		if v := recover(); v != nil {
+			t.setState(statePanicked)
+			stackbuf := make([]byte, 16*1024)
+			i := runtime.Stack(stackbuf, false)
+			stackbuf = stackbuf[:i]
+			g.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
+				Runnable: t.runnable,
+				PanicVal: v,
+				Stack:    stackbuf,
+			}))
+		} else {
+			t.setState(stateFinished)
+		}
+	}()
+
+	origError := t.runnable()
+	if origError != nil {
+		t.setErr(origError)
+	}
+
+	if err := g.filterError(origError); err != nil {
+		g.triggerError(t.runnable, err)
+		g.Stop()
 	}
 }
+
+type state uint8
+
+const (
+	stateNew state = iota
+	stateRunning
+	stateFinished
+	statePanicked
+)

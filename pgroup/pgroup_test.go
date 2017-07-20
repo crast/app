@@ -1,6 +1,7 @@
 package pgroup
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,11 +44,54 @@ func TestParallelWaitDeadlock(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(int32(50), handle)
-	group.running[-1] = true
+	group.running[nil] = true
 	group.Go(stupidWorkFunc(group, 10, &handle))
 	group.Wait()
-	assert.False(group.running[-1])
+	assert.False(group.running[nil])
 	assert.Equal(int32(60), handle)
+}
+
+func TestTaskWait(t *testing.T) {
+	assert := assert.New(t)
+	var handle int32
+	group := New()
+	simpleWork := func(t time.Duration) *Task {
+		return group.Go(func() error {
+			time.Sleep(t * time.Millisecond)
+			atomic.AddInt32(&handle, int32(t))
+			return nil
+		})
+	}
+	task1 := simpleWork(20)
+	task2 := simpleWork(30)
+	group.GoF(func() {
+		time.Sleep(150 * time.Millisecond)
+		simpleWork(40)
+	})
+	go group.Wait()
+	task1.Wait()
+	assert.Equal(stateFinished, task1.state)
+	assert.NotEqual(stateNew, task2.state)
+	task2.Wait()
+	assert.Equal(int32(50), handle)
+	group.Wait()
+	assert.Equal(int32(90), handle)
+}
+
+func TestTaskResults(t *testing.T) {
+	assert := assert.New(t)
+
+	group := New()
+	task := group.Go(func() error {
+		time.Sleep(100 * time.Millisecond)
+		return errors.New("The Error")
+	})
+	go group.Wait()
+	result := task.Wait()
+	assert.Equal("The Error", result.Error())
+	assert.Equal(true, task.Failed())
+	assert.Equal("The Error", task.Err().Error())
+	assert.Exactly(result, task.Err())
 }
 
 ///// UTILITIES
