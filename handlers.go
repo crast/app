@@ -4,28 +4,28 @@ import (
 	"fmt"
 	"net"
 
-	"gopkg.in/crast/app.v0/crash"
+	"gopkg.in/crast/app.v0/pgroup"
 )
 
 type PanicInfo interface {
-	crash.PanicInfo
+	pgroup.PanicInfo
 }
 
 // Given when we have an error return value from a runnable or a closer.
 type ErrorInfo interface {
-	crash.ErrorInfo
+	pgroup.ErrorInfo
 }
 
 // A function to handle panics.
 // Can be overridden if desired to provide your own panic responder.
 var PanicHandler = func(info PanicInfo) {
-	fmt.Printf("Panic recovered: %v\nStack: %s\n", info.PanicVal(), info.Stack())
+	fmt.Printf("[app] Panic recovered: %v\nStack: %s\n", info.PanicVal(), info.Stack())
 }
 
 // A function to handle errors.
 // Can be overridden if desired to provide your own error responder.
 var ErrorHandler = func(info ErrorInfo) {
-	fmt.Printf("Got error: %v\n", info.Err())
+	fmt.Printf("[app] Got error: %v\n", info.Err())
 }
 
 // Filter errors we expect to have that are not really errors.
@@ -36,14 +36,6 @@ var FilterError = func(err error) error {
 			Debug("filtered error %v", opErr)
 			return nil
 		}
-	}
-	return err
-}
-
-// Only call FilterError if err != nil
-func filterError(err error) error {
-	if err != nil {
-		err = FilterError(err)
 	}
 	return err
 }

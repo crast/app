@@ -3,7 +3,6 @@ package app //  import "gopkg.in/crast/app.v0"
 import (
 	"net"
 
-	"gopkg.in/crast/app.v0/crash"
 	"gopkg.in/crast/app.v0/pgroup"
 )
 
@@ -80,8 +79,8 @@ func Root() *pgroup.Group {
 func newAppGroup() *pgroup.Group {
 	group := pgroup.New()
 	group.FilterError = func(err error) error { return FilterError(err) }
-	group.ErrorHandler = func(info crash.ErrorInfo) { ErrorHandler(info) }
-	group.PanicHandler = func(info crash.PanicInfo) { PanicHandler(info) }
+	group.ErrorHandler = func(info pgroup.ErrorInfo) { ErrorHandler(info) }
+	group.PanicHandler = func(info pgroup.PanicInfo) { PanicHandler(info) }
 	group.DebugHandler = Debug
 	return group
 }

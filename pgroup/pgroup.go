@@ -4,21 +4,18 @@ import (
 	"runtime"
 	"sync"
 	"time"
-
-	"gopkg.in/crast/app.v0/crash"
 )
 
 /*
 Group is a heterogeneous group of goroutines managed together.
 */
 type Group struct {
-	mutex    *sync.Mutex
+	mutex    sync.Mutex
 	closers  []func() error
 	running  map[*Task]bool
 	notify   chan *Task
 	stopping bool
 	stopchan chan struct{}
-	cond     *sync.Cond
 
 	// Optional event handlers that can be set by the user.
 	// Event handlers must not be changed once the group has begun running
@@ -31,10 +28,10 @@ type Group struct {
 
 	// ErrorHandler is called whenever a function run by Go or a closer returns an error value.
 	// It is not called if an error is suppressed by FilterError.
-	ErrorHandler func(crash.ErrorInfo)
+	ErrorHandler func(ErrorInfo)
 
 	// PanicHandler is called whenever a function run by Go, GoF, or a closer panics.
-	PanicHandler func(crash.PanicInfo)
+	PanicHandler func(PanicInfo)
 
 	DebugHandler func(string, ...interface{})
 
@@ -44,19 +41,16 @@ type Group struct {
 }
 
 func New() *Group {
-	mu := &sync.Mutex{}
 	g := &Group{
 		running:  make(map[*Task]bool),
 		notify:   make(chan *Task, 1),
 		stopchan: make(chan struct{}, 1),
-		mutex:    mu,
-		cond:     sync.NewCond(mu),
 
 		StopUnblockTime: 10 * time.Second,
 
 		FilterError:  func(err error) error { return err },
-		ErrorHandler: func(crash.ErrorInfo) {},
-		PanicHandler: func(crash.PanicInfo) {},
+		ErrorHandler: func(ErrorInfo) {},
+		PanicHandler: nil,
 		DebugHandler: func(string, ...interface{}) {},
 	}
 	g.stopchan <- struct{}{}
@@ -82,8 +76,8 @@ Exactly equivalent to:
         return nil
     })
 */
-func (g *Group) GoF(f func()) {
-	g.Go(func() error {
+func (g *Group) GoF(f func()) *Task {
+	return g.Go(func() error {
 		f()
 		return nil
 	})
@@ -93,13 +87,13 @@ func (g *Group) GoF(f func()) {
 // If the runnable panics, captures the panic and starts the shutdown process.
 // If the runnable returns a non-nil error, then also starts the shutdown process.
 //
-// The returned task can be used for waiting on; it will have already been Started
+// The returned task can be used for waiting on.
 func (g *Group) Go(runnable func() error) *Task {
 	task := &Task{
-		group:    g,
-		runnable: runnable,
+		group: g,
+		done:  make(chan struct{}),
 	}
-	task.Start()
+	task.start(runnable)
 	return task
 }
 
@@ -150,9 +144,6 @@ func (g *Group) drainRunning() {
 		g.mutex.Lock()
 		delete(g.running, task)
 		l = len(g.running)
-		if task != nil {
-			g.cond.Broadcast()
-		}
 		g.mutex.Unlock()
 	}
 }
@@ -196,7 +187,7 @@ func (g *Group) syncStop() (closed bool) {
 		} else {
 			closed = true
 			if err := g.filterError(closer()); err != nil {
-				g.triggerError(closer, err)
+				g.ErrorHandler(errData{nil, err})
 			}
 		}
 	}
@@ -243,22 +234,17 @@ func (g *Group) debug(fmt string, v ...interface{}) {
 	g.DebugHandler(fmt, v...)
 }
 
-func (g *Group) triggerError(runnable func() error, err error) {
-	g.ErrorHandler(crash.NewCrashInfo(&crash.CrashData{
-		Runnable: runnable,
-		Err:      err,
-	}))
-}
-
 // Task is used to collect results of one single invocation.
 type Task struct {
-	group    *Group
-	err      error
-	runnable func() error
-	state    state
+	group *Group
+	done  chan struct{}
+
+	err   error
+	state state
 }
 
 // Err returns the error associated after running this task.
+// If the task is still running, will return nil.
 func (t *Task) Err() (err error) {
 	t.group.mutex.Lock()
 	err = t.err
@@ -273,7 +259,7 @@ func (t *Task) setErr(err error) {
 	t.group.mutex.Unlock()
 }
 
-// Failed returns true if the task has failed.
+// Failed returns true if the task has failed. (err or panic)
 // Will acquire a lock, so do not run this on a tight loop.
 func (t *Task) Failed() bool {
 	t.group.mutex.Lock()
@@ -283,24 +269,18 @@ func (t *Task) Failed() bool {
 }
 
 // Wait on this task.
-func (t *Task) Wait() (err error) {
-	t.group.mutex.Lock()
-	for t.state == stateNew || t.state == stateRunning || t.group.running[t] {
-		t.group.cond.Wait()
-	}
-	err = t.err
-	t.group.mutex.Unlock()
-	return err
+func (t *Task) Wait() {
+	<-t.done
 }
 
 // Start the task. Only call this once!
-func (t *Task) Start() {
+func (t *Task) start(runnable func() error) {
 	t.group.mutex.Lock()
 	t.group.running[t] = true
 	t.state = stateRunning
 	t.group.mutex.Unlock()
 
-	go t.run()
+	go t.run(runnable)
 }
 
 func (t *Task) setState(state state) {
@@ -309,33 +289,38 @@ func (t *Task) setState(state state) {
 	t.group.mutex.Unlock()
 }
 
-func (t *Task) run() {
+func (t *Task) run(runnable func() error) {
 	g := t.group
 
 	defer func() {
-		g.notify <- t
-		if v := recover(); v != nil {
+		var panicVal interface{}
+		if panicVal = recover(); panicVal != nil {
 			t.setState(statePanicked)
-			stackbuf := make([]byte, 16*1024)
-			i := runtime.Stack(stackbuf, false)
-			stackbuf = stackbuf[:i]
-			g.PanicHandler(crash.NewCrashInfo(&crash.CrashData{
-				Runnable: t.runnable,
-				PanicVal: v,
-				Stack:    stackbuf,
-			}))
 		} else {
 			t.setState(stateFinished)
 		}
+		close(t.done)
+		g.notify <- t
+
+		if panicVal != nil && g.PanicHandler != nil {
+			stackbuf := make([]byte, 16*1024)
+			i := runtime.Stack(stackbuf, false)
+			stackbuf = stackbuf[:i]
+			g.PanicHandler(&panicData{
+				task:     t,
+				panicVal: panicVal,
+				stack:    stackbuf,
+			})
+		}
 	}()
 
-	origError := t.runnable()
+	origError := runnable()
 	if origError != nil {
 		t.setErr(origError)
 	}
 
 	if err := g.filterError(origError); err != nil {
-		g.triggerError(t.runnable, err)
+		g.ErrorHandler(&errData{t, err})
 		g.Stop()
 	}
 }
